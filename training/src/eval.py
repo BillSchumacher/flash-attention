@@ -20,9 +20,7 @@ log = utils.get_logger(__name__)
 
 
 def remove_prefix(text: str, prefix: str):
-    if text.startswith(prefix):
-        return text[len(prefix) :]
-    return text  # or whatever
+    return text[len(prefix) :] if text.startswith(prefix) else text
 
 
 def load_checkpoint(path, device='cpu'):

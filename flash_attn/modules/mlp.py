@@ -27,4 +27,4 @@ class Mlp(nn.Module):
         y = self.fc1(x)
         y = self.activation(y)
         y = self.fc2(y)
-        return y if not self.return_residual else (y, x)
+        return (y, x) if self.return_residual else y

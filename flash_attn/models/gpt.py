@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 def create_mixer_cls(config, layer_idx=None, process_group=None, device=None, dtype=None):
     factory_kwargs = {'device': device, 'dtype': dtype}
     head_dim = getattr(config, 'head_dim', config.hidden_size // config.num_attention_heads)
-    softmax_scale = 1.0 if not config.scale_attn_weights else head_dim ** (-0.5)
+    softmax_scale = head_dim ** (-0.5) if config.scale_attn_weights else 1.0
     if config.scale_attn_by_inverse_layer_idx:
         assert layer_idx is not None
         softmax_scale /= float(layer_idx + 1)
@@ -77,15 +77,23 @@ def create_mixer_cls(config, layer_idx=None, process_group=None, device=None, dt
     parallel_kwargs = ({'process_group': process_group,
                         'sequence_parallel': getattr(config, 'sequence_parallel', True)}
                        if process_group is not None else {})
-    mixer_cls = partial(mha_cls, num_heads=config.num_attention_heads,
-                        qkv_proj_bias=qkv_proj_bias, out_proj_bias=out_proj_bias,
-                        dropout=config.attn_pdrop,
-                        softmax_scale=softmax_scale, causal=True, layer_idx=layer_idx,
-                        rotary_emb_dim=rotary_emb_dim, rotary_emb_scale_base=rotary_emb_scale_base,
-                        rotary_emb_interleaved=rotary_emb_interleaved,
-                        use_flash_attn=use_flash_attn,
-                        **serial_kwargs, **parallel_kwargs, **factory_kwargs)
-    return mixer_cls
+    return partial(
+        mha_cls,
+        num_heads=config.num_attention_heads,
+        qkv_proj_bias=qkv_proj_bias,
+        out_proj_bias=out_proj_bias,
+        dropout=config.attn_pdrop,
+        softmax_scale=softmax_scale,
+        causal=True,
+        layer_idx=layer_idx,
+        rotary_emb_dim=rotary_emb_dim,
+        rotary_emb_scale_base=rotary_emb_scale_base,
+        rotary_emb_interleaved=rotary_emb_interleaved,
+        use_flash_attn=use_flash_attn,
+        **serial_kwargs,
+        **parallel_kwargs,
+        **factory_kwargs
+    )
 
 
 def create_mlp_cls(config, layer_idx=None, process_group=None, device=None, dtype=None):
@@ -131,12 +139,10 @@ def create_mlp_cls(config, layer_idx=None, process_group=None, device=None, dtyp
             mlp_cls = partial(mlp_cls, hidden_features=inner_dim, activation=activation,
                               checkpoint_lvl=mlp_checkpoint_lvl,
                               **parallel_kwargs, **factory_kwargs)
-        elif fused_dense_sqrelu_dense:
+        else:
             assert FusedDenseSqreluDense is not None
             mlp_cls = partial(FusedDenseSqreluDense, hidden_features=inner_dim,
                               checkpoint_lvl=mlp_checkpoint_lvl, **factory_kwargs)
-        else:
-            raise RuntimeError('MLP type not supported')
     return mlp_cls
 
 
@@ -183,11 +189,8 @@ class GPTPreTrainedModel(nn.Module):
         super().__init__()
         if not isinstance(config, GPT2Config):
             raise ValueError(
-                "Parameter config in `{}(config)` should be an instance of class `GPT2Config`. "
-                "To create a model from a Google pretrained model use "
-                "`model = {}.from_pretrained(PRETRAINED_MODEL_NAME)`".format(
-                    self.__class__.__name__, self.__class__.__name__
-                ))
+                f"Parameter config in `{self.__class__.__name__}(config)` should be an instance of class `GPT2Config`. To create a model from a Google pretrained model use `model = {self.__class__.__name__}.from_pretrained(PRETRAINED_MODEL_NAME)`"
+            )
         self.config = config
 
     @classmethod
@@ -287,10 +290,14 @@ class GPTModel(GPTPreTrainedModel):
                                      for i in range(config.num_hidden_layers)])
 
         self.fused_dropout_add_ln = getattr(config, 'fused_dropout_add_ln', False)
-        if self.fused_dropout_add_ln:
-            if ((not self.parallel_block and dropout_add_layer_norm is None)
-                or (self.parallel_block and dropout_add_layer_norm_parallel_residual is None)):
-                raise ImportError('dropout_layer_norm is not installed')
+        if self.fused_dropout_add_ln and (
+            (not self.parallel_block and dropout_add_layer_norm is None)
+            or (
+                self.parallel_block
+                and dropout_add_layer_norm_parallel_residual is None
+            )
+        ):
+            raise ImportError('dropout_layer_norm is not installed')
         if self.prenorm:
             self.drop_f = nn.Dropout(config.resid_pdrop)
             self.ln_f = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon,
@@ -337,29 +344,29 @@ class GPTModel(GPTPreTrainedModel):
             else:
                 hidden_states = layer(hidden_states, mixer_kwargs=mixer_kwargs)
         if self.prenorm:
-            if not self.fused_dropout_add_ln:
-                dropped = self.drop_f(hidden_states)
-                if not self.parallel_block:
-                    residual = (dropped + residual) if residual is not None else dropped
-                else:
-                    dropped2 = self.drop_f(hidden_states2)
-                    residual = ((residual + dropped + dropped2)
-                                if residual is not None else dropped + dropped2)
-                hidden_states = self.ln_f(residual.to(dtype=self.ln_f.weight.dtype))
-            else:
+            if self.fused_dropout_add_ln:
                 # Set prenorm=False here since we don't need the residual
-                if not self.parallel_block:
-                    hidden_states = dropout_add_layer_norm(
-                        hidden_states, residual, self.ln_f.weight, self.ln_f.bias,
-                        self.drop_f.p if self.training else 0.0, self.ln_f.eps, prenorm=False,
-                        residual_in_fp32=self.residual_in_fp32
-                    )
-                else:
+                if self.parallel_block:
                     hidden_states, _ = dropout_add_layer_norm_parallel_residual(
                         hidden_states, hidden_states2, residual, self.ln_f.weight, self.ln_f.bias,
                         None, None, self.drop_f.p if self.training else 0.0, self.ln_f.eps,
                         prenorm=False, residual_in_fp32=self.residual_in_fp32
                     )
+                else:
+                    hidden_states = dropout_add_layer_norm(
+                        hidden_states, residual, self.ln_f.weight, self.ln_f.bias,
+                        self.drop_f.p if self.training else 0.0, self.ln_f.eps, prenorm=False,
+                        residual_in_fp32=self.residual_in_fp32
+                    )
+            else:
+                dropped = self.drop_f(hidden_states)
+                if self.parallel_block:
+                    dropped2 = self.drop_f(hidden_states2)
+                    residual = ((residual + dropped + dropped2)
+                                if residual is not None else dropped + dropped2)
+                else:
+                    residual = (dropped + residual) if residual is not None else dropped
+                hidden_states = self.ln_f(residual.to(dtype=self.ln_f.weight.dtype))
         return hidden_states
 
 
@@ -384,9 +391,9 @@ class GPTLMHeadModel(GPTPreTrainedModel, GenerationMixin):
             self.project_out = None
         if process_group is None:
             self.lm_head = nn.Linear(embed_dim, vocab_size, bias=lm_head_bias, **factory_kwargs)
+        elif ColumnParallelLinear is None:
+            raise ImportError('fused_dense_lib is not installed')
         else:
-            if ColumnParallelLinear is None:
-                raise ImportError('fused_dense_lib is not installed')
             self.lm_head = ColumnParallelLinear(
                 embed_dim, vocab_size, process_group, bias=lm_head_bias,
                 sequence_parallel=getattr(config, 'sequence_parallel', True), **factory_kwargs
@@ -441,8 +448,8 @@ class GPTLMHeadModel(GPTPreTrainedModel, GenerationMixin):
                     state_dict[f'transformer.layers.{l}.norm1.bias'] = ln_bias
             ln_weight = state_dict.pop('transformer.ln_0.weight')
             ln_bias = state_dict.pop('transformer.ln_0.bias')
-            state_dict[f'transformer.layers.0.norm1.weight'] = ln_weight
-            state_dict[f'transformer.layers.0.norm1.bias'] = ln_bias
+            state_dict['transformer.layers.0.norm1.weight'] = ln_weight
+            state_dict['transformer.layers.0.norm1.bias'] = ln_bias
         return super().load_state_dict(state_dict, strict=strict)
 
 

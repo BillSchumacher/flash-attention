@@ -52,11 +52,16 @@ logger = logging.getLogger(__name__)
 def create_mixer_cls(config, cross_attn=False, return_residual=False):
     use_flash_attn = getattr(config, 'use_flash_attn', False)
     fused_bias_fc = getattr(config, 'fused_bias_fc', False)
-    mixer_cls = partial(MHA, num_heads=config.num_attention_heads, cross_attn=cross_attn,
-                        dropout=config.attention_probs_dropout_prob, causal=False,
-                        fused_bias_fc=fused_bias_fc, use_flash_attn=use_flash_attn,
-                        return_residual=return_residual)
-    return mixer_cls
+    return partial(
+        MHA,
+        num_heads=config.num_attention_heads,
+        cross_attn=cross_attn,
+        dropout=config.attention_probs_dropout_prob,
+        causal=False,
+        fused_bias_fc=fused_bias_fc,
+        use_flash_attn=use_flash_attn,
+        return_residual=return_residual,
+    )
 
 
 def create_mlp_cls(config, layer_idx=None, return_residual=False):
@@ -65,12 +70,6 @@ def create_mlp_cls(config, layer_idx=None, return_residual=False):
     if fused_mlp:
         assert config.hidden_act in ['gelu_new', 'gelu_fast'], ('fused_mlp only '
                                                                 'supports approximate gelu')
-    if not fused_mlp:
-        approximate = 'tanh' if config.hidden_act in ['gelu_new', 'gelu_fast'] else 'none'
-        mlp_cls = partial(Mlp, hidden_features=inner_dim,
-                          activation=partial(F.gelu, approximate=approximate),
-                          return_residual=return_residual)
-    else:
         if FusedMLP is None:
             raise ImportError('fused_dense is not installed')
         mlp_checkpoint_lvl = getattr(config, 'mlp_checkpoint_lvl', 0)
@@ -78,9 +77,20 @@ def create_mlp_cls(config, layer_idx=None, return_residual=False):
         if isinstance(mlp_checkpoint_lvl, Sequence):
             assert layer_idx is not None
             mlp_checkpoint_lvl = mlp_checkpoint_lvl[layer_idx]
-        mlp_cls = partial(FusedMLP, hidden_features=inner_dim,
-                          checkpoint_lvl=mlp_checkpoint_lvl, return_residual=return_residual)
-    return mlp_cls
+        return partial(
+            FusedMLP,
+            hidden_features=inner_dim,
+            checkpoint_lvl=mlp_checkpoint_lvl,
+            return_residual=return_residual,
+        )
+    else:
+        approximate = 'tanh' if config.hidden_act in ['gelu_new', 'gelu_fast'] else 'none'
+        return partial(
+            Mlp,
+            hidden_features=inner_dim,
+            activation=partial(F.gelu, approximate=approximate),
+            return_residual=return_residual,
+        )
 
 
 def create_block(config, layer_idx=None):
@@ -93,12 +103,17 @@ def create_block(config, layer_idx=None):
     mixer_cls = create_mixer_cls(config, cross_attn, return_residual=return_residual)
     mlp_cls = create_mlp_cls(config, layer_idx, return_residual=return_residual)
     norm_cls = partial(nn.LayerNorm, eps=config.layer_norm_eps)
-    block = Block(config.hidden_size, mixer_cls, mlp_cls, norm_cls=norm_cls,
-                  prenorm=False, resid_dropout1=config.hidden_dropout_prob,
-                  resid_dropout2=config.hidden_dropout_prob,
-                  fused_dropout_add_ln=getattr(config, 'fused_dropout_add_ln', False),
-                  return_residual=return_residual)
-    return block
+    return Block(
+        config.hidden_size,
+        mixer_cls,
+        mlp_cls,
+        norm_cls=norm_cls,
+        prenorm=False,
+        resid_dropout1=config.hidden_dropout_prob,
+        resid_dropout2=config.hidden_dropout_prob,
+        fused_dropout_add_ln=getattr(config, 'fused_dropout_add_ln', False),
+        return_residual=return_residual,
+    )
 
 
 # https://github.com/huggingface/transformers/blob/7032e0203262ebb2ebf55da8d2e01f873973e835/src/transformers/models/bert/modeling_bert.py#L748
@@ -149,13 +164,11 @@ class BertEncoder(nn.Module):
                 if key_padding_mask is not None:
                     subset_idx = torch.nonzero(subset_mask[key_padding_mask], as_tuple=False).flatten()
                     subset_seqlens = (subset_mask & key_padding_mask).sum(dim=-1, dtype=torch.int32)
-                    subset_cu_seqlens = F.pad(torch.cumsum(subset_seqlens, dim=0,
-                                                           dtype=torch.torch.int32), (1, 0))
                 else:
                     subset_idx = torch.nonzero(subset_mask, as_tuple=False).flatten()
                     subset_seqlens = subset_mask.sum(dim=-1, dtype=torch.int32)
-                    subset_cu_seqlens = F.pad(torch.cumsum(subset_seqlens, dim=0,
-                                                           dtype=torch.torch.int32), (1, 0))
+                subset_cu_seqlens = F.pad(torch.cumsum(subset_seqlens, dim=0,
+                                                       dtype=torch.torch.int32), (1, 0))
                 hidden_states_subset, hidden_states = index_first_axis_residual(
                     hidden_states, subset_idx
                 )
@@ -174,7 +187,7 @@ class BertPooler(nn.Module):
         fused_bias_fc = getattr(config, 'fused_bias_fc', False)
         if fused_bias_fc and FusedDense is None:
             raise ImportError('fused_dense is not installed')
-        linear_cls = nn.Linear if not fused_bias_fc else FusedDense
+        linear_cls = FusedDense if fused_bias_fc else nn.Linear
         self.dense = linear_cls(config.hidden_size, config.hidden_size)
         self.activation = nn.Tanh()
 
@@ -197,7 +210,7 @@ class BertPredictionHeadTransform(nn.Module):
         self.fused_dropout_add_ln = getattr(config, 'fused_dropout_add_ln', False)
         if self.fused_dropout_add_ln and layer_norm is None:
             raise ImportError('dropout_add_layer_norm is not installed')
-        linear_cls = nn.Linear if not fused_bias_fc else FusedDense
+        linear_cls = FusedDense if fused_bias_fc else nn.Linear
         self.dense = linear_cls(config.hidden_size, config.hidden_size)
         approximate = 'tanh' if config.hidden_act in ['gelu_new', 'gelu_fast'] else 'none'
         self.transform_act_fn = nn.GELU(approximate=approximate)
@@ -206,11 +219,16 @@ class BertPredictionHeadTransform(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.transform_act_fn(hidden_states)
-        if not self.fused_dropout_add_ln:
-            hidden_states = self.layer_norm(hidden_states)
-        else:
-            hidden_states = layer_norm(hidden_states, self.layer_norm.weight, self.layer_norm.bias,
-                                       self.layer_norm.eps)
+        hidden_states = (
+            layer_norm(
+                hidden_states,
+                self.layer_norm.weight,
+                self.layer_norm.bias,
+                self.layer_norm.eps,
+            )
+            if self.fused_dropout_add_ln
+            else self.layer_norm(hidden_states)
+        )
         return hidden_states
 
 
@@ -221,7 +239,7 @@ class BertLMPredictionHead(nn.Module):
         fused_bias_fc = getattr(config, 'fused_bias_fc', False)
         if fused_bias_fc and FusedDense is None:
             raise ImportError('fused_dense is not installed')
-        linear_cls = nn.Linear if not fused_bias_fc else FusedDense
+        linear_cls = FusedDense if fused_bias_fc else nn.Linear
 
         self.transform = BertPredictionHeadTransform(config)
 
@@ -255,11 +273,8 @@ class BertPreTrainedModel(nn.Module):
         super().__init__()
         if not isinstance(config, BertConfig):
             raise ValueError(
-                "Parameter config in `{}(config)` should be an instance of class `BertConfig`. "
-                "To create a model from a Google pretrained model use "
-                "`model = {}.from_pretrained(PRETRAINED_MODEL_NAME)`".format(
-                    self.__class__.__name__, self.__class__.__name__
-                ))
+                f"Parameter config in `{self.__class__.__name__}(config)` should be an instance of class `BertConfig`. To create a model from a Google pretrained model use `model = {self.__class__.__name__}.from_pretrained(PRETRAINED_MODEL_NAME)`"
+            )
         self.config = config
 
     @classmethod
@@ -322,11 +337,16 @@ class BertModel(BertPreTrainedModel):
                                         token_type_ids=token_type_ids)
         # TD [2022-12:18]: Don't need to force residual in fp32
         # BERT puts embedding LayerNorm before embedding dropout.
-        if not self.fused_dropout_add_ln:
-            hidden_states = self.emb_ln(hidden_states)
-        else:
-            hidden_states = layer_norm(hidden_states, self.emb_ln.weight, self.emb_ln.bias,
-                                       self.emb_ln.eps)
+        hidden_states = (
+            layer_norm(
+                hidden_states,
+                self.emb_ln.weight,
+                self.emb_ln.bias,
+                self.emb_ln.eps,
+            )
+            if self.fused_dropout_add_ln
+            else self.emb_ln(hidden_states)
+        )
         hidden_states = self.emb_drop(hidden_states)
 
         if masked_tokens_mask is not None:
@@ -377,8 +397,11 @@ class BertForPreTraining(BertPreTrainedModel):
         use_xentropy = getattr(config, 'use_xentropy', False)
         if use_xentropy and CrossEntropyLoss is None:
             raise ImportError('xentropy_cuda is not installed')
-        loss_cls = (nn.CrossEntropyLoss if not use_xentropy
-                    else partial(CrossEntropyLoss, inplace_backward=True))
+        loss_cls = (
+            partial(CrossEntropyLoss, inplace_backward=True)
+            if use_xentropy
+            else nn.CrossEntropyLoss
+        )
 
         self.bert = BertModel(config)
         self.cls = BertPreTrainingHeads(config)
@@ -423,7 +446,7 @@ class BertForPreTraining(BertPreTrainedModel):
 
         total_loss = None
         if labels is not None and next_sentence_label is not None:
-            if self.dense_seq_output and labels is not None:  # prediction_scores are already flattened
+            if self.dense_seq_output:  # prediction_scores are already flattened
                 masked_lm_loss = self.mlm_loss(prediction_scores,
                                                labels.flatten()[masked_token_idx])
             else:

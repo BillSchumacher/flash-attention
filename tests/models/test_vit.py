@@ -9,9 +9,7 @@ from flash_attn.models.vit import vit_base_patch16_224 as flash_vit_base_patch16
 
 
 @pytest.mark.parametrize('fused_mlp', [False, True])
-# @pytest.mark.parametrize('fused_mlp', [False])
 @pytest.mark.parametrize('optimized', [False, True])
-# @pytest.mark.parametrize('optimized', [True])
 def test_vit(optimized, fused_mlp):
     """Check that our implementation of ViT matches the timm's implementation:
     the output of our forward pass in fp16 should be around the same as
@@ -46,5 +44,5 @@ def test_vit(optimized, fused_mlp):
     print(f'Output mean diff: {(out - out_ref).abs().mean().item()}')
     print(f'timm fp16 max diff: {(out_timm - out_ref).abs().max().item()}')
     print(f'timm fp16 mean diff: {(out_timm - out_ref).abs().mean().item()}')
-    rtol = 2 if not fused_mlp else 4
+    rtol = 4 if fused_mlp else 2
     assert (out - out_ref).abs().max().item() < rtol * (out_timm - out_ref).abs().max().item()

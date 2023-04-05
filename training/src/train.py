@@ -130,7 +130,5 @@ def train(config: DictConfig) -> Optional[float]:
     if not config.trainer.get("fast_dev_run"):
         log.info(f"Best model ckpt: {trainer.checkpoint_callback.best_model_path}")
 
-    # Return metric score for hyperparameter optimization
-    optimized_metric = config.get("optimized_metric")
-    if optimized_metric:
+    if optimized_metric := config.get("optimized_metric"):
         return trainer.callback_metrics[optimized_metric]

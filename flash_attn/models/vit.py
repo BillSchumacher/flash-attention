@@ -31,19 +31,24 @@ except ImportError:
 
 def create_mixer_cls(num_heads, qkv_bias, attn_drop, use_flash_attn, fused_bias_fc,
                      cross_attn=False):
-    mixer_cls = partial(MHA, num_heads=num_heads, cross_attn=cross_attn, bias=qkv_bias,
-                        dropout=attn_drop, fused_bias_fc=fused_bias_fc,
-                        use_flash_attn=use_flash_attn)
-    return mixer_cls
+    return partial(
+        MHA,
+        num_heads=num_heads,
+        cross_attn=cross_attn,
+        bias=qkv_bias,
+        dropout=attn_drop,
+        fused_bias_fc=fused_bias_fc,
+        use_flash_attn=use_flash_attn,
+    )
 
 
 def create_mlp_cls(embed_dim, mlp_ratio, act_layer, fused_mlp):
     inner_dim = int(embed_dim * mlp_ratio)
-    if not fused_mlp:
-        mlp_cls = partial(Mlp, hidden_features=inner_dim, activation=act_layer())
-    else:
-        mlp_cls = partial(FusedMLP, hidden_features=inner_dim)
-    return mlp_cls
+    return (
+        partial(FusedMLP, hidden_features=inner_dim)
+        if fused_mlp
+        else partial(Mlp, hidden_features=inner_dim, activation=act_layer())
+    )
 
 
 def create_block(embed_dim, num_heads, mlp_ratio, qkv_bias, drop_rate, attn_drop_rate,
@@ -53,12 +58,19 @@ def create_block(embed_dim, num_heads, mlp_ratio, qkv_bias, drop_rate, attn_drop
     mixer_cls = create_mixer_cls(num_heads, qkv_bias, attn_drop_rate, use_flash_attn, fused_bias_fc,
                                  cross_attn=(last_layer_subset and layer_idx == n_layer - 1))
     mlp_cls = create_mlp_cls(embed_dim, mlp_ratio, act_layer, fused_mlp)
-    # TD [2022-10-15]: Force residual in fp32 in case of DeepSpeed
-    block = Block(embed_dim, mixer_cls, mlp_cls, norm_cls=norm_layer,
-                  prenorm=True, resid_dropout1=drop_rate, resid_dropout2=drop_rate,
-                  drop_path1=drop_path1, drop_path2=drop_path2,
-                  fused_dropout_add_ln=fused_dropout_add_ln, residual_in_fp32=True)
-    return block
+    return Block(
+        embed_dim,
+        mixer_cls,
+        mlp_cls,
+        norm_cls=norm_layer,
+        prenorm=True,
+        resid_dropout1=drop_rate,
+        resid_dropout2=drop_rate,
+        drop_path1=drop_path1,
+        drop_path2=drop_path2,
+        fused_dropout_add_ln=fused_dropout_add_ln,
+        residual_in_fp32=True,
+    )
 
 
 class VisionTransformer(nn.Module):
@@ -300,5 +312,4 @@ def vit_base_patch16_224(pretrained=False, **kwargs):
     """
     assert not pretrained
     model_kwargs = dict(patch_size=16, embed_dim=768, depth=12, num_heads=12, **kwargs)
-    model = VisionTransformer(**model_kwargs)
-    return model
+    return VisionTransformer(**model_kwargs)

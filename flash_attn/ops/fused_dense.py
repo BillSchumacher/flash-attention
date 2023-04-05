@@ -65,7 +65,7 @@ class FusedDenseFunc(torch.autograd.Function):
             ctx.save_for_backward(x, weight)
         else:
             ctx.save_for_backward(weight)
-        return output if not return_residual else (output, x)
+        return (output, x) if return_residual else output
 
     @staticmethod
     @custom_bwd
@@ -89,11 +89,15 @@ class FusedDenseFunc(torch.autograd.Function):
         batch_dim = batch_shape.numel()
         grad_output = grad_output.reshape(batch_dim, grad_output.shape[-1])
         if ctx.needs_input_grad[0]:
-            if not ctx.return_residual:
-                grad_input = F.linear(grad_output, weight.t())
-            else:
-                grad_input = torch.addmm(grad_input.reshape(batch_dim, grad_input.shape[-1]),
-                                         grad_output, weight)
+            grad_input = (
+                torch.addmm(
+                    grad_input.reshape(batch_dim, grad_input.shape[-1]),
+                    grad_output,
+                    weight,
+                )
+                if ctx.return_residual
+                else F.linear(grad_output, weight.t())
+            )
             grad_input = grad_input.reshape(*batch_shape, grad_input.shape[-1])
             if process_group is not None:
                 reduce_fn = reduce_scatter_raw if sequence_parallel else all_reduce_raw
@@ -123,10 +127,9 @@ def fused_dense_func(x: Tensor, weight: Tensor, bias: Optional[Tensor] = None,
     if x.is_cuda and weight.is_cuda and (bias is None or bias.is_cuda) and dtype_eligible:
         return FusedDenseFunc.apply(x, weight, bias, return_residual, process_group,
                                     sequence_parallel)
-    else:
-        assert process_group is None
-        out = F.linear(x, weight, bias)
-        return out if not return_residual else (out, x)
+    assert process_group is None
+    out = F.linear(x, weight, bias)
+    return (out, x) if return_residual else out
 
 
 class FusedDense(nn.Linear):
@@ -270,7 +273,7 @@ class FusedMLPFunc(torch.autograd.Function):
         elif checkpoint_lvl == 2:
             ctx.save_for_backward(x, weight1, weight2, bias1)
         output2 = output2.reshape(*batch_shape, output2.shape[-1])
-        return output2 if not return_residual else (output2, x)
+        return (output2, x) if return_residual else output2
 
     @staticmethod
     @custom_bwd
@@ -290,12 +293,16 @@ class FusedMLPFunc(torch.autograd.Function):
             total_x = x
         batch_shape = grad_output.shape[:-1]
         batch_dim = batch_shape.numel()
-        if checkpoint_lvl in [0, 1]:
+        if checkpoint_lvl == 0:
             if process_group is not None and sequence_parallel:
                 total_x, handle_x = all_gather_raw(x, process_group, async_op=True)
-            if checkpoint_lvl == 0 or (checkpoint_lvl == 1 and activation == 'relu'):
+            pre_act, output1 = rest
+        elif checkpoint_lvl == 1:
+            if process_group is not None and sequence_parallel:
+                total_x, handle_x = all_gather_raw(x, process_group, async_op=True)
+            if activation == 'relu':
                 pre_act, output1 = rest
-            elif checkpoint_lvl == 1:
+            else:
                 pre_act, = rest
                 output1 = activation_fn(pre_act)
         elif checkpoint_lvl == 2:
@@ -336,11 +343,15 @@ class FusedMLPFunc(torch.autograd.Function):
             if not ctx.needs_input_grad[2]:
                 grad_bias1 = None
         if ctx.needs_input_grad[0]:
-            if not ctx.return_residual:
-                grad_input = F.linear(grad_pre_act, weight1.t())
-            else:
-                grad_input = torch.addmm(grad_input.reshape(batch_dim, grad_input.shape[-1]),
-                                         grad_pre_act, weight1)
+            grad_input = (
+                torch.addmm(
+                    grad_input.reshape(batch_dim, grad_input.shape[-1]),
+                    grad_pre_act,
+                    weight1,
+                )
+                if ctx.return_residual
+                else F.linear(grad_pre_act, weight1.t())
+            )
             grad_input = grad_input.reshape(*batch_shape, grad_input.shape[-1])
             if process_group is not None:
                 reduce_fn = reduce_scatter_raw if sequence_parallel else all_reduce_raw
@@ -358,14 +369,13 @@ class FusedMLPFunc(torch.autograd.Function):
             else:
                 grad_weight1 = None
                 grad_bias1 = grad_pre_act if ctx.needs_input_grad[2] else None
+        elif ctx.needs_input_grad[1]:
+            if process_group is not None and sequence_parallel:
+                handle_x.wait()
+            grad_weight1 = F.linear(grad_pre_act.t(),
+                                    total_x.reshape(batch_dim, total_x.shape[-1]).t())
         else:
-            if ctx.needs_input_grad[1]:
-                if process_group is not None and sequence_parallel:
-                    handle_x.wait()
-                grad_weight1 = F.linear(grad_pre_act.t(),
-                                        total_x.reshape(batch_dim, total_x.shape[-1]).t())
-            else:
-                grad_weight1 = None
+            grad_weight1 = None
         if process_group is not None and ctx.needs_input_grad[0]:
             handle_grad_input.wait()
         return (grad_input, grad_weight1, grad_bias1, grad_weight2, grad_bias2,
@@ -380,7 +390,7 @@ def fused_mlp_func(
     process_group: Optional[ProcessGroup] = None,
     sequence_parallel: bool = True
 ):
-    assert activation in ['gelu_approx', 'relu']
+    assert activation in {'gelu_approx', 'relu'}
     dtype_eligible = (x.dtype in [torch.float16, torch.bfloat16]
                       or (x.dtype == torch.float32 and torch.is_autocast_enabled()))
     # If we save pre-activation, dimension must be divisible by 128 (relu) or 8 (gelu)
@@ -391,14 +401,13 @@ def fused_mlp_func(
             x, weight1, bias1, weight2, bias2, activation, save_pre_act, return_residual,
             checkpoint_lvl, heuristic, process_group, sequence_parallel
         )
-    else:
-        assert process_group is None
-        pre_act = F.linear(x, weight1, bias1)
-        activation_fn = (partial(F.gelu, approximate='tanh') if activation == 'gelu_approx'
-                         else partial(F.relu, inplace=True))
-        output1 = activation_fn(pre_act)
-        output2 = F.linear(output1, weight2, bias2)
-        return output2 if not return_residual else (output2, x)
+    assert process_group is None
+    pre_act = F.linear(x, weight1, bias1)
+    activation_fn = (partial(F.gelu, approximate='tanh') if activation == 'gelu_approx'
+                     else partial(F.relu, inplace=True))
+    output1 = activation_fn(pre_act)
+    output2 = F.linear(output1, weight2, bias2)
+    return (output2, x) if return_residual else output2
 
 
 class FusedMLP(nn.Module):
@@ -441,7 +450,11 @@ class FusedMLP(nn.Module):
         self.fc2 = nn.Linear(hidden_features, out_features, bias=bias2, **factory_kwargs)
 
     def forward(self, x, process_group=None):
-        dtype = x.dtype if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype()
+        dtype = (
+            torch.get_autocast_gpu_dtype()
+            if torch.is_autocast_enabled()
+            else x.dtype
+        )
         if self.heuristic == 'auto':
             if self.activation == 'gelu_approx':
                 if torch.cuda.get_device_capability('cuda') == (9, 0):
@@ -463,7 +476,7 @@ class FusedMLP(nn.Module):
             out, x = out
         if process_group is not None:
             out = reduce_scatter(out, process_group)
-        return out if not self.return_residual else (out, x)
+        return (out, x) if self.return_residual else out
 
 
 class ParallelFusedMLP(nn.Module):
@@ -506,7 +519,11 @@ class ParallelFusedMLP(nn.Module):
                                      bias=bias2, **factory_kwargs)
 
     def forward(self, x):
-        dtype = x.dtype if not torch.is_autocast_enabled() else torch.get_autocast_gpu_dtype()
+        dtype = (
+            torch.get_autocast_gpu_dtype()
+            if torch.is_autocast_enabled()
+            else x.dtype
+        )
         if self.heuristic == 'auto':
             if self.activation == 'gelu_approx':
                 cuda_ver = tuple(map(int, torch.version.cuda.split('.')))

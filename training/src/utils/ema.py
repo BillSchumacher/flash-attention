@@ -62,7 +62,6 @@ class ExponentialMovingAverage:
                     "the model to which they belong from being garbage "
                     "collected."
                 )
-            return parameters
         else:
             parameters = list(parameters)
             if len(parameters) != len(self.shadow_params):
@@ -71,7 +70,8 @@ class ExponentialMovingAverage:
                     "from number of shadow parameters maintained by this "
                     "ExponentialMovingAverage"
                 )
-            return parameters
+
+        return parameters
 
     def update(
         self,
@@ -238,11 +238,11 @@ class ExponentialMovingAverage:
             raise ValueError('Decay must be between 0 and 1')
         self.num_updates = state_dict["num_updates"]
         assert self.num_updates is None or isinstance(self.num_updates, int), \
-            "Invalid num_updates"
+                "Invalid num_updates"
 
         self.shadow_params = state_dict["shadow_params"]
         assert isinstance(self.shadow_params, list), \
-            "shadow_params must be a list"
+                "shadow_params must be a list"
         assert all(
             isinstance(p, torch.Tensor) for p in self.shadow_params
         ), "shadow_params must all be Tensors"
@@ -250,31 +250,30 @@ class ExponentialMovingAverage:
         self.collected_params = state_dict["collected_params"]
         if self.collected_params is not None:
             assert isinstance(self.collected_params, list), \
-                "collected_params must be a list"
+                    "collected_params must be a list"
             assert all(
                 isinstance(p, torch.Tensor) for p in self.collected_params
             ), "collected_params must all be Tensors"
             assert len(self.collected_params) == len(self.shadow_params), \
-                "collected_params and shadow_params had different lengths"
+                    "collected_params and shadow_params had different lengths"
 
-        if len(self.shadow_params) == len(self._params_refs):
-            # Consistent with torch.optim.Optimizer, cast things to consistent
-            # device and dtype with the parameters
-            params = [p() for p in self._params_refs]
-            # If parameters have been garbage collected, just load the state
-            # we were given without change.
-            if not any(p is None for p in params):
-                # ^ parameter references are still good
-                for i, p in enumerate(params):
-                    self.shadow_params[i] = to_float_maybe(self.shadow_params[i].to(
-                        device=p.device, dtype=p.dtype
-                    ))
-                    if self.collected_params is not None:
-                        self.collected_params[i] = self.collected_params[i].to(
-                            device=p.device, dtype=p.dtype
-                        )
-        else:
+        if len(self.shadow_params) != len(self._params_refs):
             raise ValueError(
                 "Tried to `load_state_dict()` with the wrong number of "
                 "parameters in the saved state."
             )
+        # Consistent with torch.optim.Optimizer, cast things to consistent
+        # device and dtype with the parameters
+        params = [p() for p in self._params_refs]
+            # If parameters have been garbage collected, just load the state
+            # we were given without change.
+        if all(p is not None for p in params):
+            # ^ parameter references are still good
+            for i, p in enumerate(params):
+                self.shadow_params[i] = to_float_maybe(self.shadow_params[i].to(
+                    device=p.device, dtype=p.dtype
+                ))
+                if self.collected_params is not None:
+                    self.collected_params[i] = self.collected_params[i].to(
+                        device=p.device, dtype=p.dtype
+                    )

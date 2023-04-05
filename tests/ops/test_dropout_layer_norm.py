@@ -24,31 +24,26 @@ is_sm8x = torch.cuda.get_device_capability('cuda')[0] >= 8
 
 @pytest.mark.parametrize('is_rms_norm', [False, True])
 @pytest.mark.parametrize('has_colscale', [True, False])
-# @pytest.mark.parametrize('has_colscale', [False])
 @pytest.mark.parametrize('has_rowscale', [True, False])
-# @pytest.mark.parametrize('has_rowscale', [True])
 @pytest.mark.parametrize('has_residual', [True, False])
-# @pytest.mark.parametrize('has_residual', [False])
 @pytest.mark.parametrize('dropout_p', [0.37, 0.0])
-# @pytest.mark.parametrize('dropout_p', [0.0])
 @pytest.mark.parametrize('weight_dtype', [torch.float32, torch.float16])
-# @pytest.mark.parametrize('weight_dtype', [torch.float32])
 @pytest.mark.parametrize('input_dtype,residual_dtype',
                          [(torch.float16, torch.float16), (torch.float16, torch.float32),
                           (torch.float32, torch.float32)]
                          + ([(torch.bfloat16, torch.bfloat16), (torch.bfloat16, torch.float32)] if is_sm8x else []))
-# @pytest.mark.parametrize('input_dtype,residual_dtype', [(torch.float16, torch.float32)])
 @pytest.mark.parametrize('hidden_size', [192, 256, 384, 768, 1024, 1280, 1536, 1600, 2048, 2560, 3000, 3072, 4096, 5120, 6144])
-# @pytest.mark.parametrize('hidden_size', [256])
 def test_dropout_layer_norm_training(hidden_size, input_dtype, residual_dtype, weight_dtype,
                                      dropout_p, has_residual, has_rowscale, has_colscale, is_rms_norm):
     if weight_dtype == torch.float16 and input_dtype == torch.bfloat16:
         pytest.skip()  # Not supported
     if is_rms_norm and FusedRMSNorm is None:
         pytest.skip()  # We need Apex's FusedRMSNorm to test
-    layer_norm_cls = torch.nn.LayerNorm if not is_rms_norm else FusedRMSNorm
-    our_layer_norm_cls = DropoutAddLayerNorm if not is_rms_norm else DropoutAddRMSNorm
-    our_layer_norm_func = dropout_add_layer_norm if not is_rms_norm else dropout_add_rms_norm
+    layer_norm_cls = FusedRMSNorm if is_rms_norm else torch.nn.LayerNorm
+    our_layer_norm_cls = DropoutAddRMSNorm if is_rms_norm else DropoutAddLayerNorm
+    our_layer_norm_func = (
+        dropout_add_rms_norm if is_rms_norm else dropout_add_layer_norm
+    )
     device = 'cuda'
     # rtol, atol = (1e-5, 1e-6) if input_dtype == torch.float32 else (1e-3, 1e-4)
     rtol, atol = (1e-3, 1e-4)
@@ -182,14 +177,7 @@ def test_dropout_layer_norm_eval(hidden_size, input_dtype, residual_dtype, weigh
                          [(torch.float16, torch.float16), (torch.float16, torch.float32),
                           (torch.float32, torch.float32)]
                          + ([(torch.bfloat16, torch.bfloat16), (torch.bfloat16, torch.float32)] if is_sm8x else []))
-# @pytest.mark.parametrize('has_colscale', [True])
-# @pytest.mark.parametrize('has_rowscale', [False])
-# @pytest.mark.parametrize('has_residual', [True])
-# @pytest.mark.parametrize('dropout_p', [0.0])
-# @pytest.mark.parametrize('weight_dtype', [torch.float32])
-# @pytest.mark.parametrize('input_dtype,residual_dtype', [(torch.float32, torch.float32)])
 @pytest.mark.parametrize('hidden_size', [192, 256, 384, 768, 1024, 1280, 1536, 1600, 2048, 2560, 3000, 3072, 4096, 5120, 6144])
-# @pytest.mark.parametrize('hidden_size', [256])
 def test_dropout_layer_norm_prenorm_training(hidden_size, input_dtype, residual_dtype, weight_dtype,
                                              dropout_p, has_residual, has_rowscale, has_colscale,
                                              is_rms_norm):
@@ -197,9 +185,11 @@ def test_dropout_layer_norm_prenorm_training(hidden_size, input_dtype, residual_
         pytest.skip()  # Not supported
     if is_rms_norm and FusedRMSNorm is None:
         pytest.skip()  # We need Apex's FusedRMSNorm to test
-    layer_norm_cls = torch.nn.LayerNorm if not is_rms_norm else FusedRMSNorm
-    our_layer_norm_cls = DropoutAddLayerNorm if not is_rms_norm else DropoutAddRMSNorm
-    our_layer_norm_func = dropout_add_layer_norm if not is_rms_norm else dropout_add_rms_norm
+    layer_norm_cls = FusedRMSNorm if is_rms_norm else torch.nn.LayerNorm
+    our_layer_norm_cls = DropoutAddRMSNorm if is_rms_norm else DropoutAddLayerNorm
+    our_layer_norm_func = (
+        dropout_add_rms_norm if is_rms_norm else dropout_add_layer_norm
+    )
     device = 'cuda'
     # rtol, atol = (1e-5, 1e-6) if input_dtype == torch.float32 else (1e-3, 1e-4)
     rtol, atol = (1e-3, 2e-4)

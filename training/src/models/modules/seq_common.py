@@ -14,7 +14,7 @@ from einops import reduce, rearrange
 
 def pooling(x, pooling_mode='CLS', key_padding_mask=None, batch_first=True):
     if pooling_mode not in ['MEAN', 'SUM', 'CLS', 'LAST', 'FLATTEN']:
-        raise NotImplementedError(f'pooling_mode must be MEAN, SUM, CLS, LAST, FLATTEN')
+        raise NotImplementedError('pooling_mode must be MEAN, SUM, CLS, LAST, FLATTEN')
     if pooling_mode in ['MEAN', 'SUM']:
         if key_padding_mask is not None:
             mask = rearrange(~key_padding_mask.bool_matrix,
@@ -23,25 +23,21 @@ def pooling(x, pooling_mode='CLS', key_padding_mask=None, batch_first=True):
         s = reduce(x, 'b s ... -> b ...' if batch_first else 's b ... -> b ...', 'sum')
         if pooling_mode == 'SUM':
             return s
-        else:
-            if key_padding_mask is None:
-                return s / x.shape[1 if batch_first else 0]
-            else:
-                lengths = rearrange(key_padding_mask._lengths, 'b -> b 1')
-                return s / lengths
+        if key_padding_mask is None:
+            return s / x.shape[1 if batch_first else 0]
+        lengths = rearrange(key_padding_mask._lengths, 'b -> b 1')
+        return s / lengths
     elif pooling_mode == 'CLS':
         return x[:, 0] if batch_first else x[0]
     elif pooling_mode == 'LAST':
         if key_padding_mask is None:
             return x[:, -1] if batch_first else x[-1]
-        else:
-            lengths = key_padding_mask._lengths
-            if batch_first:
-                batch_size = x.shape[0]
-                return x[torch.arange(batch_size, device=x.device), lengths - 1]
-            else:
-                batch_size = x.shape[1]
-                return x[lengths - 1, torch.arange(batch_size, device=x.device)]
+        lengths = key_padding_mask._lengths
+        return (
+            x[torch.arange(x.shape[0], device=x.device), lengths - 1]
+            if batch_first
+            else x[lengths - 1, torch.arange(x.shape[1], device=x.device)]
+        )
     elif pooling_mode == 'FLATTEN':
         return rearrange(x, 'b ... -> b (...)' if batch_first else 's b ... -> b (s ...)')
 
@@ -247,13 +243,21 @@ class MlpBig(nn.Module):
         cur_hidden_features = hidden_features
         layers = []
         for _ in range(4):
-            layers.append(nn.Linear(in_features, cur_hidden_features, **factory_kwargs))
-            layers.append(act_layer())
-            layers.append(nn.Dropout(drop))
+            layers.extend(
+                (
+                    nn.Linear(in_features, cur_hidden_features, **factory_kwargs),
+                    act_layer(),
+                    nn.Dropout(drop),
+                )
+            )
             in_features = cur_hidden_features
             cur_hidden_features *= 2
-        layers.append(nn.Linear(in_features, out_features, **factory_kwargs))
-        layers.append(nn.Dropout(drop))
+        layers.extend(
+            (
+                nn.Linear(in_features, out_features, **factory_kwargs),
+                nn.Dropout(drop),
+            )
+        )
         self.fwd = nn.Sequential(*layers)
 
     def forward(self, x):

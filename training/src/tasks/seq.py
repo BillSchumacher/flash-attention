@@ -141,12 +141,11 @@ class SequenceModel(LightningModule):
 
         if 'scheduler' not in self.cfg.train:
             return optimizer
-        else:
-            # lr_scheduler should be called either every step (default) or every epoch
-            lr_scheduler = hydra.utils.instantiate(self.cfg.train.scheduler, optimizer)
-            return [optimizer], {'scheduler': lr_scheduler,
-                                 'interval': self.cfg.train.get('scheduler_interval', 'step'),
-                                 'monitor': self.cfg.train.get('scheduler_monitor', 'val/loss')}
+        # lr_scheduler should be called either every step (default) or every epoch
+        lr_scheduler = hydra.utils.instantiate(self.cfg.train.scheduler, optimizer)
+        return [optimizer], {'scheduler': lr_scheduler,
+                             'interval': self.cfg.train.get('scheduler_interval', 'step'),
+                             'monitor': self.cfg.train.get('scheduler_monitor', 'val/loss')}
 
     def optimizer_zero_grad(self, epoch, batch_idx, optimizer, optimizer_idx):
         # https://pytorch-lightning.readthedocs.io/en/latest/guides/speed.html#set-grads-to-none

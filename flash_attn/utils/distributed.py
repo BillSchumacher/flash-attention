@@ -118,8 +118,7 @@ def allreduce_sequence_parallel_grad(model: torch.nn.Module, process_group: Proc
     # as different ranks might have different number of parameters (e.g., only rank 0 has bias).
     params_seqparallel = {name: p for name, p in model.named_parameters()
                           if getattr(p, '_sequence_parallel', False)}
-    grads = [p.grad for _, p in sorted(params_seqparallel.items())]
-    if grads:
+    if grads := [p.grad for _, p in sorted(params_seqparallel.items())]:
         with torch.no_grad():
             coalesced = torch._utils._flatten_dense_tensors(grads)
             torch.distributed.all_reduce(coalesced, group=process_group)

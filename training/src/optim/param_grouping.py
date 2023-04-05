@@ -67,7 +67,7 @@ def group_parameters_for_optimizer(model, optimizer_cfg, bias_weight_decay=False
     param_dict = {pn: p for pn, p in model.named_parameters() if p.requires_grad}
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
-            fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
+            fpn = f'{mn}.{pn}' if mn else pn
             # In case of parameter sharing, some parameters show up here but are not in
             # param_dict.keys()
             if not p.requires_grad or fpn not in param_dict:
@@ -106,7 +106,10 @@ def group_parameters_for_optimizer(model, optimizer_cfg, bias_weight_decay=False
         ]
     # Add parameters with special hyperparameters
     # Unique dicts
-    hps = [dict(s) for s in set(frozenset(param_dict[pn]._optim.items()) for pn in special)]
+    hps = [
+        dict(s)
+        for s in {frozenset(param_dict[pn]._optim.items()) for pn in special}
+    ]
     for hp in hps:
         params = [param_dict[pn] for pn in sorted(list(special)) if param_dict[pn]._optim == hp]
         param_groups.append({"params": params, **hp})

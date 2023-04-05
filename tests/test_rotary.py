@@ -11,12 +11,9 @@ from flash_attn.layers.rotary import apply_rotary_emb_func, apply_rotary_emb_tor
 
 is_sm8x = torch.cuda.get_device_capability('cuda') >= (8, 0)
 
-@pytest.mark.parametrize('dtype', ([torch.float16] if not is_sm8x else [torch.float16, torch.bfloat16]))
-# @pytest.mark.parametrize('dtype', ([torch.float16]))
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16] if is_sm8x else [torch.float16])
 @pytest.mark.parametrize('rotary_fraction', [1.0, 0.5])
-# @pytest.mark.parametrize('rotary_fraction', [0.5])
 @pytest.mark.parametrize('inplace', [False, True])
-# @pytest.mark.parametrize('inplace', [False])
 def test_rotary_single_tensor(inplace, rotary_fraction, dtype):
     rtol = 1e-3
     batch_size = 32

@@ -174,7 +174,7 @@ class ImagenetDataModule(LightningDataModule):
                 ),
             ])
         """
-        preprocessing = transforms.Compose(
+        return transforms.Compose(
             [
                 transforms.RandomResizedCrop(self.image_size),
                 transforms.RandomHorizontalFlip(),
@@ -182,8 +182,6 @@ class ImagenetDataModule(LightningDataModule):
                 imagenet_normalization(),
             ]
         )
-
-        return preprocessing
 
     def val_transform(self) -> Callable:
         """The standard imagenet transforms for validation.
@@ -199,7 +197,7 @@ class ImagenetDataModule(LightningDataModule):
             ])
         """
 
-        preprocessing = transforms.Compose(
+        return transforms.Compose(
             [
                 transforms.Resize(self.image_size + 32),
                 transforms.CenterCrop(self.image_size),
@@ -207,7 +205,6 @@ class ImagenetDataModule(LightningDataModule):
                 imagenet_normalization(),
             ]
         )
-        return preprocessing
 
     def train_dataloader(self, *args: Any, **kwargs: Any) -> DataLoader:
         """ The train dataloader """
@@ -225,12 +222,7 @@ class ImagenetDataModule(LightningDataModule):
         """ The val dataloader """
         # If using RepeatAugment, we set trainer.replace_sampler_ddp=False, so we have to
         # construct the DistributedSampler ourselves.
-        if not self.cache_val_dataset:
-            sampler = (DistributedSampler(self.dataset_val, shuffle=False, drop_last=self.drop_last)
-                       if self.num_aug_repeats != 0 else None)
-            return self._data_loader(self.dataset_val, batch_size=self.batch_size_eval,
-                                     sampler=sampler)
-        else:
+        if self.cache_val_dataset:
             print('Caching val dataset')
             sampler = (SequentialSampler(self.dataset_val) if self.trainer.world_size <= 1
                        else DistributedSampler(self.dataset_val, shuffle=False,
@@ -242,10 +234,10 @@ class ImagenetDataModule(LightningDataModule):
             assert len(batches) == len(indices)
             self.dataset_val = DictDataset(dict(zip(indices, batches)),
                                            length=len(self.dataset_val))
-            sampler = (DistributedSampler(self.dataset_val, shuffle=False, drop_last=self.drop_last)
-                       if self.num_aug_repeats != 0 else None)
-            return self._data_loader(self.dataset_val, batch_size=self.batch_size_eval,
-                                     sampler=sampler)
+        sampler = (DistributedSampler(self.dataset_val, shuffle=False, drop_last=self.drop_last)
+                   if self.num_aug_repeats != 0 else None)
+        return self._data_loader(self.dataset_val, batch_size=self.batch_size_eval,
+                                 sampler=sampler)
 
     def test_dataloader(self, *args: Any, **kwargs: Any) -> Union[DataLoader, List[DataLoader]]:
         """ The test dataloader """

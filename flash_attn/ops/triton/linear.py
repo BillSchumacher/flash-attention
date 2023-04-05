@@ -162,15 +162,8 @@ def kernel_fwd(
             b = tl.load(B, mask=rk[:, None] < k, other=0.0)
         acc += tl.dot(a, b)
 
-        if A_ROWMAJOR:
-            A += BLOCK_K
-        else:
-            A += BLOCK_K * stride_ak
-        if B_COLMAJOR:
-            B += BLOCK_K
-        else:
-            B += BLOCK_K * stride_bk
-
+        A += BLOCK_K if A_ROWMAJOR else BLOCK_K * stride_ak
+        B += BLOCK_K if B_COLMAJOR else BLOCK_K * stride_bk
     # Putting bias after the matmul (instead of before) is faster, idk why
     if BIAS:
         bias = tl.load(bias + rn, mask=rn < N, other=0.0).to(tl.float32)
@@ -221,7 +214,7 @@ def triton_linear_act(
     #     dtype = torch.get_autocast_gpu_dtype()
     #     x, weight, bias = [a.to(dtype=dtype) for a in [x, weight, bias]]
 
-    assert activation in ['id', 'gelu', 'gelu_approx', 'squared_relu']
+    assert activation in {'id', 'gelu', 'gelu_approx', 'squared_relu'}
 
     batch_shape, n = x.shape[:-1], x.shape[-1]
     batch_dim = batch_shape.numel()
@@ -275,11 +268,14 @@ def triton_linear_act(
         GROUP_M=8,  # speed optimization: group the programs
     )
 
-    if not save_act_input:
-        return output.reshape(*batch_shape, output.shape[-1])
-    else:
-        return (output.reshape(*batch_shape, output.shape[-1]),
-                act_input.reshape(*batch_shape, act_input.shape[-1]))
+    return (
+        (
+            output.reshape(*batch_shape, output.shape[-1]),
+            act_input.reshape(*batch_shape, act_input.shape[-1]),
+        )
+        if save_act_input
+        else output.reshape(*batch_shape, output.shape[-1])
+    )
 
 
 @triton.autotune(
@@ -430,7 +426,7 @@ def triton_dgrad_act(
     :param act_input: an optional tensor to save the activation inputs (for backward)
     :return: result tensor
     """
-    assert activation in ['id', 'gelu', 'gelu_approx', 'squared_relu']
+    assert activation in {'id', 'gelu', 'gelu_approx', 'squared_relu'}
 
     batch_shape, n = grad_output.shape[:-1], grad_output.shape[-1]
     batch_dim = batch_shape.numel()

@@ -27,7 +27,7 @@ def state_dict_from_pretrained(model_name, device=None, dtype=None):
         )
         state_dict = {}
         for sharded_file in resolved_archive_file:
-            state_dict.update(torch.load(sharded_file, map_location=mapped_device))
+            state_dict |= torch.load(sharded_file, map_location=mapped_device)
     else:
         state_dict = torch.load(cached_file(model_name, WEIGHTS_NAME), map_location=device)
     # Convert dtype before moving to GPU to save memory

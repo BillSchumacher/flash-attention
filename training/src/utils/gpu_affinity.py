@@ -38,8 +38,7 @@ class device:
         affinity_list = [int(x) for x in affinity_string]
         affinity_list.reverse()  # so core 0 is in 0th element of list
 
-        ret = [i for i, e in enumerate(affinity_list) if e != 0]
-        return ret
+        return [i for i, e in enumerate(affinity_list) if e != 0]
 
 
 def set_socket_affinity(gpu_id):
@@ -117,8 +116,7 @@ def get_thread_siblings_list():
     for fname in pathlib.Path(path[0]).glob(path[1:]):
         with open(fname) as f:
             content = f.read().strip()
-            res = pattern.findall(content)
-            if res:
+            if res := pattern.findall(content):
                 pair = tuple(map(int, res[0]))
                 thread_siblings_list.append(pair)
     return thread_siblings_list
@@ -138,5 +136,4 @@ def set_affinity(gpu_id, nproc_per_node, mode='socket'):
     else:
         raise RuntimeError('Unknown affinity mode')
 
-    affinity = os.sched_getaffinity(0)
-    return affinity
+    return os.sched_getaffinity(0)

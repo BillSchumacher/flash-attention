@@ -135,12 +135,11 @@ class DDPStrategyZero2(DDPStrategy):
         checkpoint_path = Path(checkpoint_path)
         if checkpoint_path.is_file():
             return super().load_checkpoint(self, str(checkpoint_path))
-        else:
-            assert checkpoint_path.is_dir()
-            global_states = self.checkpoint_io.load_checkpoint(checkpoint_path / 'model_states.pt')
-            local_optimizer_states = self.checkpoint_io.load_checkpoint(
-                checkpoint_path / f'{self.global_rank:03d}_optim_states.pt',
-                map_location='cuda'
-            )
-            global_states['optimizer_states'] = local_optimizer_states
-            return global_states
+        assert checkpoint_path.is_dir()
+        global_states = self.checkpoint_io.load_checkpoint(checkpoint_path / 'model_states.pt')
+        local_optimizer_states = self.checkpoint_io.load_checkpoint(
+            checkpoint_path / f'{self.global_rank:03d}_optim_states.pt',
+            map_location='cuda'
+        )
+        global_states['optimizer_states'] = local_optimizer_states
+        return global_states

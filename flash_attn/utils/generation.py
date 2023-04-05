@@ -50,24 +50,23 @@ def sample(logits, top_k=1, top_p=0.0, temperature=1.0):
     Arguments:
         logits: Tensor of shape (batch_size, vocab_size)
     """
-    if top_k == 1:  # Short-circuit for greedy decoding
+    if top_k == 1:
         return logits.argmax(dim=-1)
+    if top_p > 0.0:
+        assert top_p <= 1.0, 'top-p should be in (0, 1].'
+    if top_k > 0:
+        top_k = min(top_k, logits.size(-1))  # Safety check
+        logits_top, indices = torch.topk(logits, top_k, dim=-1)
+        logits_top /= temperature
+        modify_logits_for_top_p_filtering(logits_top, top_p)
+        return indices[
+            torch.arange(indices.shape[0], device=indices.device),
+            torch.multinomial(torch.softmax(logits_top, dim=-1), num_samples=1).squeeze(dim=-1)
+        ]
     else:
-        if top_p > 0.0:
-            assert top_p <= 1.0, 'top-p should be in (0, 1].'
-        if top_k > 0:
-            top_k = min(top_k, logits.size(-1))  # Safety check
-            logits_top, indices = torch.topk(logits, top_k, dim=-1)
-            logits_top /= temperature
-            modify_logits_for_top_p_filtering(logits_top, top_p)
-            return indices[
-                torch.arange(indices.shape[0], device=indices.device),
-                torch.multinomial(torch.softmax(logits_top, dim=-1), num_samples=1).squeeze(dim=-1)
-            ]
-        else:
-            logits_top = logits / temperature
-            modify_logits_for_top_p_filtering(logits_top, top_p)
-            return torch.multinomial(torch.softmax(logits_top, dim=-1), num_samples=1).squeeze(dim=-1)
+        logits_top = logits / temperature
+        modify_logits_for_top_p_filtering(logits_top, top_p)
+        return torch.multinomial(torch.softmax(logits_top, dim=-1), num_samples=1).squeeze(dim=-1)
 
 
 def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
@@ -113,7 +112,7 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
             start = time.time()
         if vocab_size is not None:
             logits = logits[..., :vocab_size]
-        scores.append(logits if not cg else logits.clone())
+        scores.append(logits.clone() if cg else logits)
         if teacher_outputs is None or teacher_output_len <= seqlen_og:
             next_token = sample(logits, top_k=top_k, top_p=top_p, temperature=temperature)
         else:
@@ -123,15 +122,22 @@ def decode(input_ids, model, max_length, top_k=1, top_p=0.0, temperature=1.0,
         while True:
             position_ids = torch.full((batch_size, 1), inference_params.sequence_len_offset,
                                     dtype=torch.long, device=input_ids.device)
-            if not cg:
-                logits = model(rearrange(next_token, 'b -> b 1'), position_ids=position_ids,
-                               inference_params=inference_params).logits[:, -1]
-            else:
-                logits = model._decoding_cache.run(rearrange(next_token, 'b -> b 1'), position_ids,
-                                                   inference_params.sequence_len_offset)
+            logits = (
+                model._decoding_cache.run(
+                    rearrange(next_token, 'b -> b 1'),
+                    position_ids,
+                    inference_params.sequence_len_offset,
+                )
+                if cg
+                else model(
+                    rearrange(next_token, 'b -> b 1'),
+                    position_ids=position_ids,
+                    inference_params=inference_params,
+                ).logits[:, -1]
+            )
             if vocab_size is not None:
                 logits = logits[..., :vocab_size]
-            scores.append(logits if not cg else logits.clone())
+            scores.append(logits.clone() if cg else logits)
             if teacher_outputs is None or teacher_output_len <= inference_params.sequence_len_offset + 1:
                 next_token = sample(logits, top_k=top_k, temperature=temperature)
             else:
@@ -187,7 +193,7 @@ def seqlen_to_seqlen_type(seqlen: int) -> int:
 
 
 def seqlen_type_to_seqlen(seqlen_type: int) -> int:
-    assert seqlen_type in [0, 1, 2]
+    assert seqlen_type in {0, 1, 2}
     return 1 if seqlen_type == 0 else (32 if seqlen_type == 1 else 2048)
 
 

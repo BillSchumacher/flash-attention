@@ -36,8 +36,12 @@ def generate_random_padding_mask(max_seqlen, batch_size, device, mode='random'):
         lengths1 = torch.randint(min(max(1, max_seqlen - 20), 128), min(max_seqlen, 128) + 1,
                                  (batch_size - batch_size // 4 * 3, 1), device=device)
         lengths = torch.cat([lengths0, lengths1], dim=0)
-    padding_mask = repeat(torch.arange(max_seqlen, device=device), 's -> b s', b=batch_size) < lengths
-    return padding_mask
+    return (
+        repeat(
+            torch.arange(max_seqlen, device=device), 's -> b s', b=batch_size
+        )
+        < lengths
+    )
 
 
 def generate_qkv(x, Wqkv, nheads, query_padding_mask=None, key_padding_mask=None,
@@ -152,10 +156,11 @@ def attention_ref(q, k, v, query_padding_mask=None, key_padding_mask=None, dropo
         q, k, v = q.float(), k.float(), v.float()
     seqlen_q, seqlen_k = q.shape[1], k.shape[1]
     d = q.shape[-1]
-    if not reorder_ops:
-        scores = torch.einsum('bthd,bshd->bhts', q / math.sqrt(d), k)
-    else:
-        scores = torch.einsum('bthd,bshd->bhts', q, k / math.sqrt(d))
+    scores = (
+        torch.einsum('bthd,bshd->bhts', q, k / math.sqrt(d))
+        if reorder_ops
+        else torch.einsum('bthd,bshd->bhts', q / math.sqrt(d), k)
+    )
     if bias is not None:
         scores = (scores + bias).to(dtype=scores.dtype)
     if key_padding_mask is not None:
@@ -201,8 +206,7 @@ def generate_sparsity_mask(seqlen, sparsity=0.3):
     # mask = torch.stack([torch.tensor([1, 1] * repeats, dtype=torch.bool, device='cuda')], dim=-1)
     # mask = torch.stack([torch.tensor([1, 0] * repeats, dtype=torch.bool, device='cuda')], dim=-1)
     nrow, ncol = seqlen // 16, seqlen // 256
-    mask = torch.rand(nrow, ncol, device='cuda') < sparsity
-    return mask
+    return torch.rand(nrow, ncol, device='cuda') < sparsity
 
 
 def attention_blocksparse_ref(qkv, blockmask, attn_mask, dropout_p, dropout_mask):
@@ -336,14 +340,16 @@ def get_dropout_fraction(dropout_mask, query_padding_mask=None, key_padding_mask
                      else torch.full((batch_size,), seqlen_q, device=dropout_mask.device))
     key_lengths = (key_padding_mask.sum(dim=-1) if key_padding_mask is not None
                    else torch.full((batch_size,), seqlen_k, device=dropout_mask.device))
-    if not causal:
-        numel_per_batch = query_lengths * key_lengths
-    else:
-        numel_per_batch = torch.where(
+    numel_per_batch = (
+        torch.where(
             query_lengths <= key_lengths,
             query_lengths * (query_lengths + 1) / 2,
-            query_lengths * key_lengths - (key_lengths * (key_lengths - 1) / 2)
+            query_lengths * key_lengths
+            - (key_lengths * (key_lengths - 1) / 2),
         )
+        if causal
+        else query_lengths * key_lengths
+    )
     return dropped_total / (numel_per_batch.sum() * nheads)
 
 

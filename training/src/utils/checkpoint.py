@@ -41,9 +41,9 @@ def blockdiag_to_dense_mlp_bert(state_dict):
 def interpolate_pos_embedding(state_dict, out_seqlen, pos_embedding_name='model.pos_encoder.pe', interleave=False):
     orig_emb = state_dict['state_dict'][pos_embedding_name]
     assert (out_seqlen % orig_emb.shape[1]) == 0, 'out_seqlen must be a multiple of the original sequence length'
-    reps = [1 for i in orig_emb.shape]
+    reps = [1 for _ in orig_emb.shape]
     reps[1] = out_seqlen // orig_emb.shape[1]
-    
+
     if interleave:
         assert math.isqrt(orig_emb.shape[1]) ** 2 == orig_emb.shape[1], 'interleave only works for square lengths'
         assert math.isqrt(out_seqlen) ** 2 == out_seqlen, 'interleave only works for square lengths'

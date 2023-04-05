@@ -111,17 +111,16 @@ class VocabParallelEmbedding(nn.Embedding):
     def forward(self, input: Tensor) -> Tensor:
         if self.process_group is None:
             return super().forward(input)
-        else:
-            rank = torch.distributed.get_rank(self.process_group)
-            vocab_size = self.num_embeddings
-            vocab_start_index, vocab_end_index = rank * vocab_size, (rank + 1) * vocab_size
-            # Create a mask of valid vocab ids (1 means it needs to be masked).
-            input_ids_mask = (input < vocab_start_index) | (input >= vocab_end_index)
-            input = input - vocab_start_index
-            input[input_ids_mask] = 0
-            embeddings = super().forward(input)
-            embeddings[input_ids_mask] = 0.0
-            return embeddings
+        rank = torch.distributed.get_rank(self.process_group)
+        vocab_size = self.num_embeddings
+        vocab_start_index, vocab_end_index = rank * vocab_size, (rank + 1) * vocab_size
+        # Create a mask of valid vocab ids (1 means it needs to be masked).
+        input_ids_mask = (input < vocab_start_index) | (input >= vocab_end_index)
+        input = input - vocab_start_index
+        input[input_ids_mask] = 0
+        embeddings = super().forward(input)
+        embeddings[input_ids_mask] = 0.0
+        return embeddings
 
 
 class ColumnParallelEmbedding(nn.Embedding):
