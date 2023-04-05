@@ -42,7 +42,7 @@ class NormMonitor(Callback):
             for mn, m in model.named_modules():
                 if isinstance(m, ln_modules):
                     for pn, p in m.named_parameters():
-                        fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
+                        fpn = f'{mn}.{pn}' if mn else pn
                         named_parameters[fpn] = p
         else:
             named_parameters = dict(model.named_parameters())

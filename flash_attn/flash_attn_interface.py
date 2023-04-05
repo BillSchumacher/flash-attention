@@ -67,7 +67,7 @@ class FlashAttnQKVPackedFunc(torch.autograd.Function):
         ctx.softmax_scale = softmax_scale
         ctx.causal = causal
         ctx.deterministic = deterministic
-        return out if not return_softmax else (out, softmax_lse, S_dmask)
+        return (out, softmax_lse, S_dmask) if return_softmax else out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -107,7 +107,7 @@ class FlashAttnKVPackedFunc(torch.autograd.Function):
         ctx.softmax_scale = softmax_scale
         ctx.causal = causal
         ctx.deterministic = deterministic
-        return out if not return_softmax else (out, softmax_lse, S_dmask)
+        return (out, softmax_lse, S_dmask) if return_softmax else out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -148,7 +148,7 @@ class FlashAttnFunc(torch.autograd.Function):
         ctx.softmax_scale = softmax_scale
         ctx.causal = causal
         ctx.deterministic = deterministic
-        return out if not return_softmax else (out, softmax_lse, S_dmask)
+        return (out, softmax_lse, S_dmask) if return_softmax else out
 
     @staticmethod
     def backward(ctx, dout, *args):
@@ -206,13 +206,12 @@ class FlashAttnQKVPackedSplitFunc(torch.autograd.Function):
         ctx.deterministic = deterministic
         if not return_softmax:
             return out
-        else:
-            max_seqlen_q = max(softmax_lse0.shape[2], softmax_lse1.shape[2])
-            max_seqlen_k = max(S_dmask0.shape[3], S_dmask1.shape[3])
-            softmax_lse = torch.cat([F.pad(softmax_lse0, (0, max_seqlen_q - softmax_lse0.shape[2])),
-                                     F.pad(softmax_lse1, (0, max_seqlen_q - softmax_lse1.shape[2]))],
-                                    dim=0)
-            return out, softmax_lse, S_dmask0, S_dmask1
+        max_seqlen_q = max(softmax_lse0.shape[2], softmax_lse1.shape[2])
+        max_seqlen_k = max(S_dmask0.shape[3], S_dmask1.shape[3])
+        softmax_lse = torch.cat([F.pad(softmax_lse0, (0, max_seqlen_q - softmax_lse0.shape[2])),
+                                 F.pad(softmax_lse1, (0, max_seqlen_q - softmax_lse1.shape[2]))],
+                                dim=0)
+        return out, softmax_lse, S_dmask0, S_dmask1
 
     @staticmethod
     def backward(ctx, dout, *args):

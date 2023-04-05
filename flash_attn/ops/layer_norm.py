@@ -43,12 +43,10 @@ def _dropout_add_layer_norm_backward(dz, dx, x, x0, dmask, mu, rsigma, gamma, ro
         dzmat, dxmat, xmat, x0mat, dmask, mu, rsigma, gamma, rowscale, colscale, None, None,
         dropout_p, 1.0, 0, has_residual, is_rms_norm
     )
-    # dresidualmat is None if not has_residual
     if colscale is None:
         return dx0mat, dresidualmat, dgamma, dbeta
-    else:
-        dcolscale = rest[0]
-        return dx0mat, dresidualmat, dgamma, dbeta, dcolscale
+    dcolscale = rest[0]
+    return dx0mat, dresidualmat, dgamma, dbeta, dcolscale
 
 
 def _dropout_add_layer_norm_subset_forward(x0, residual, gamma, beta, colscale, x0_subset,
@@ -91,12 +89,10 @@ def _dropout_add_layer_norm_subset_backward(dz, dx, x, x0, dmask, mu, rsigma, ga
         dzmat, dxmat, xmat, x0mat, dmask, mu, rsigma, gamma, None, colscale, x0_subset, out_subset,
         dropout_p, rowscale_const, x0_numrows, has_residual, is_rms_norm
     )
-    # dresidualmat is None if not has_residual
     if colscale is None:
         return dx0mat, dresidualmat, dgamma, dbeta
-    else:
-        dcolscale = rest[0]
-        return dx0mat, dresidualmat, dgamma, dbeta, dcolscale
+    dcolscale = rest[0]
+    return dx0mat, dresidualmat, dgamma, dbeta, dcolscale
 
 
 def _dropout_add_layer_norm_parallel_residual_forward(
@@ -162,14 +158,19 @@ class DropoutAddLayerNormFn(torch.autograd.Function):
         ctx.is_rms_norm = is_rms_norm
         ctx.has_beta = beta is not None
         if not return_dmask:
-            return (zmat.view(x0.shape) if not prenorm
-                    else (zmat.view(x0.shape), xmat.view(x0.shape)))
-        else:
-            dmask = (dmask.view(x0.shape) if dropout_p > 0.
-                     else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
-            ctx.mark_non_differentiable(dmask)
-            return ((zmat.view(x0.shape), dmask) if not prenorm
-                    else (zmat.view(x0.shape), xmat.view(x0.shape), dmask))
+            return (
+                (zmat.view(x0.shape), xmat.view(x0.shape))
+                if prenorm
+                else zmat.view(x0.shape)
+            )
+        dmask = (dmask.view(x0.shape) if dropout_p > 0.
+                 else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
+        ctx.mark_non_differentiable(dmask)
+        return (
+            (zmat.view(x0.shape), xmat.view(x0.shape), dmask)
+            if prenorm
+            else (zmat.view(x0.shape), dmask)
+        )
 
     @staticmethod
     def backward(ctx, dz, *args):
@@ -219,14 +220,16 @@ class DropoutAddLayerNormSubsetFn(torch.autograd.Function):
         ctx.has_beta = beta is not None
         z_shape = (-1, *x0.shape[1:])
         if not return_dmask:
-            return (zmat.view(z_shape) if not prenorm
-                    else (zmat.view(z_shape), xmat.view(x0.shape)))
-        else:
-            z = zmat.view(z_shape)
-            dmask = (dmask.view(x0.shape) if dropout_p > 0.
-                     else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
-            ctx.mark_non_differentiable(dmask)
-            return ((z, dmask) if not prenorm else (z, xmat.view(x_shape), dmask))
+            return (
+                (zmat.view(z_shape), xmat.view(x0.shape))
+                if prenorm
+                else zmat.view(z_shape)
+            )
+        z = zmat.view(z_shape)
+        dmask = (dmask.view(x0.shape) if dropout_p > 0.
+                 else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
+        ctx.mark_non_differentiable(dmask)
+        return (z, xmat.view(x_shape), dmask) if prenorm else (z, dmask)
 
     @staticmethod
     def backward(ctx, dz, *args):
@@ -272,15 +275,18 @@ class DropoutAddLayerNormParallelResidualFn(torch.autograd.Function):
         ctx.has_beta = beta0 is not None
         z = (z0mat.view(x0.shape), z1mat.view(x0.shape) if z1mat is not None else None)
         if not return_dmask:
-            return z if not prenorm else (*z, xmat.view(x0.shape))
-        else:
-            dmask0 = (dmask0.view(x0.shape) if dropout_p > 0.
-                      else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
-            dmask1 = (dmask1.view(x0.shape) if dropout_p > 0. and x1 is not None
-                      else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
-            ctx.mark_non_differentiable(dmask0)
-            ctx.mark_non_differentiable(dmask1)
-            return (*z, dmask0, dmask1) if not prenorm else (*z, xmat.view(x0.shape), dmask0, dmask1)
+            return (*z, xmat.view(x0.shape)) if prenorm else z
+        dmask0 = (dmask0.view(x0.shape) if dropout_p > 0.
+                  else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
+        dmask1 = (dmask1.view(x0.shape) if dropout_p > 0. and x1 is not None
+                  else torch.ones(x0.shape, dtype=torch.uint8, device=x0.device))
+        ctx.mark_non_differentiable(dmask0)
+        ctx.mark_non_differentiable(dmask1)
+        return (
+            (*z, xmat.view(x0.shape), dmask0, dmask1)
+            if prenorm
+            else (*z, dmask0, dmask1)
+        )
 
     @staticmethod
     def backward(ctx, dz0, dz1, *args):

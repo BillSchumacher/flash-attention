@@ -160,22 +160,25 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
             and self.input_in_float16  # input must be fp16
             and (
                 self.attn_mask_type == AttnMaskType.causal
-                or (self.attn_mask_type == AttnMaskType.padding and mask is not None)
+                or (
+                    self.attn_mask_type == AttnMaskType.padding
+                    and mask is not None
+                )
             )
             and 16 < sk <= 8192  # sk must be 16 ~ 8192
             and sq % 4 == 0  # sq must be divisor of 4
             and sk % 4 == 0  # sk must be divisor of 4
             and attn_batches % 4 == 0  # np * b must be divisor of 4
-        ):
-            if 0 <= sk <= 8192:
-                batch_per_block = self.get_batch_per_block(sq, sk, b, np)
+        ) and 0 <= sk <= 8192:
+            batch_per_block = self.get_batch_per_block(sq, sk, b, np)
 
-                if self.attn_mask_type == AttnMaskType.causal:
-                    if attn_batches % batch_per_block == 0:
-                        return True
-                else:
-                    if sq % batch_per_block == 0:
-                        return True
+            if (
+                self.attn_mask_type == AttnMaskType.causal
+                and attn_batches % batch_per_block == 0
+                or self.attn_mask_type != AttnMaskType.causal
+                and sq % batch_per_block == 0
+            ):
+                return True
         return False
 
     def forward_fused_softmax(self, input, mask):
@@ -193,11 +196,7 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
         probs = torch.nn.Softmax(dim=-1)(mask_output)
 
         if self.input_in_float16 and self.softmax_in_fp32:
-            if self.input_in_fp16:
-                probs = probs.half()
-            else:
-                probs = probs.bfloat16()
-
+            probs = probs.half() if self.input_in_fp16 else probs.bfloat16()
         return probs
 
     @staticmethod

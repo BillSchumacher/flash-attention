@@ -143,7 +143,7 @@ def _bwd_kernel(
     DQ += off_z * stride_qz + off_h * stride_qh
     DK += off_z * stride_qz + off_h * stride_qh
     DV += off_z * stride_qz + off_h * stride_qh
-    for start_n in range(0, num_block):
+    for start_n in range(num_block):
         lo = start_n * BLOCK_M
         # initialize row/col offsets
         offs_qm = lo + tl.arange(0, BLOCK_M)
@@ -209,7 +209,7 @@ class _attention(torch.autograd.Function):
         BLOCK = 128
         # shape constraints
         Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
-        assert Lq == Lk and Lk == Lv
+        assert Lq == Lk == Lv
         assert Lk in {16, 32, 64, 128}
         o = torch.empty_like(q)
         grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])

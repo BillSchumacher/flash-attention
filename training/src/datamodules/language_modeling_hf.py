@@ -96,9 +96,8 @@ class LMDataModule(LightningDataModule):
 
     def process_dataset(self):
         cache_dir = None if self.cache_dir is None else self.cache_dir / self._cache_dir_name
-        if cache_dir is not None:
-            if cache_dir.is_dir():
-                return self._load_from_cache(cache_dir)
+        if cache_dir is not None and cache_dir.is_dir():
+            return self._load_from_cache(cache_dir)
 
         raw_datasets = load_dataset(self.dataset_name, self.dataset_config_name)
         # https://github.com/stanford-crfm/mistral/blob/main/src/corpora/auto.py
@@ -118,14 +117,13 @@ class LMDataModule(LightningDataModule):
         # However, it's useful for zero-shot transfer from Openwebtext,
         # as after detokenization it's closer to Openwebtext's format.
         # https://github.com/stanford-crfm/mistral/issues/12
-        if self.detokenize:
-            if self.dataset_name in DATASET_TOKENIZATION_REGISTRY:
-                detokenizer = DATASET_TOKENIZATION_REGISTRY[self.dataset_name]
-                raw_datasets = raw_datasets.map(
-                    lambda example: {'text': detokenizer(example['text'])},
-                    num_proc=max(self.num_workers, 1),
-                    desc='Running detokenizer on dataset'
-                )
+        if self.detokenize and self.dataset_name in DATASET_TOKENIZATION_REGISTRY:
+            detokenizer = DATASET_TOKENIZATION_REGISTRY[self.dataset_name]
+            raw_datasets = raw_datasets.map(
+                lambda example: {'text': detokenizer(example['text'])},
+                num_proc=max(self.num_workers, 1),
+                desc='Running detokenizer on dataset'
+            )
 
         tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name, use_fast=True)
         # Preprocessing the datasets.
@@ -157,6 +155,7 @@ class LMDataModule(LightningDataModule):
             input_ids = np.fromiter(chain(*tokenize(examples)['input_ids']), dtype=dtype)
             # Need to return a list since we're doing batched processing
             return {'input_ids': [input_ids], 'len': [len(input_ids)]}
+
         tokenized_datasets = raw_datasets.map(
             tokenize_concat,
             batched=True,

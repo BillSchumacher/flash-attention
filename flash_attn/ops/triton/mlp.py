@@ -91,22 +91,17 @@ class FusedDenseSqreluDenseFunc(torch.autograd.Function):
                     save_act_input=True
                 )
 
+        grad_output = grad_output.reshape(batch_dim, grad_output.shape[-1])
+        grad_weight2, grad_bias2 = fused_dense_cuda.linear_bias_wgrad(output1, grad_output)
         if is_bf16:
-            grad_output = grad_output.reshape(batch_dim, grad_output.shape[-1])
-            grad_weight2, grad_bias2 = fused_dense_cuda.linear_bias_wgrad(output1, grad_output)
             grad_output1 = grad_output @ weight2
             grad_act_input = sqrelu_bwd(grad_output1, act_input)
-            grad_input, grad_weight1, grad_bias1 = fused_dense_cuda.linear_bias_backward(
-                x.reshape(batch_dim, n), weight1, grad_act_input
-            )
         else:
-            grad_output = grad_output.reshape(batch_dim, grad_output.shape[-1])
-            grad_weight2, grad_bias2 = fused_dense_cuda.linear_bias_wgrad(output1, grad_output)
             grad_act_input = triton_dgrad_act(grad_output, weight2, activation='squared_relu',
                                               act_input=act_input)
-            grad_input, grad_weight1, grad_bias1 = fused_dense_cuda.linear_bias_backward(
-                x.reshape(batch_dim, n), weight1, grad_act_input
-            )
+        grad_input, grad_weight1, grad_bias1 = fused_dense_cuda.linear_bias_backward(
+            x.reshape(batch_dim, n), weight1, grad_act_input
+        )
         return grad_input.reshape_as(x), grad_weight1, grad_bias1, grad_weight2, grad_bias2, None
 
 

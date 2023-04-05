@@ -51,14 +51,21 @@ class ApplyRotaryEmb(torch.autograd.Function):
         assert seqlen <= rotary_seqlen
         assert sin.shape == (rotary_seqlen, rotary_dim // 2)
         x_ro = x[..., :rotary_dim]
-        x1, x2 = x_ro.chunk(2, dim=-1) if not interleaved else (x_ro[..., ::2], x_ro[..., 1::2])
-        out = torch.empty_like(x) if not inplace else x
+        x1, x2 = (
+            (x_ro[..., ::2], x_ro[..., 1::2])
+            if interleaved
+            else x_ro.chunk(2, dim=-1)
+        )
+        out = x if inplace else torch.empty_like(x)
         out_ro = out[..., :rotary_dim]
         if inplace:
             o1, o2 = x1, x2
         else:
-            o1, o2 = (out_ro.chunk(2, dim=-1) if not interleaved
-                      else (out_ro[..., ::2], out_ro[..., 1::2]))
+            o1, o2 = (
+                (out_ro[..., ::2], out_ro[..., 1::2])
+                if interleaved
+                else out_ro.chunk(2, dim=-1)
+            )
         rotary_emb.apply_rotary(x1, x2, rearrange(cos[:seqlen], 's d -> s 1 d'),
                                 rearrange(sin[:seqlen], 's d -> s 1 d'), o1, o2, False)
         if not inplace and rotary_dim < headdim:
@@ -66,7 +73,7 @@ class ApplyRotaryEmb(torch.autograd.Function):
         ctx.save_for_backward(cos, sin)
         ctx.interleaved = interleaved
         ctx.inplace = inplace
-        return out if not inplace else x
+        return x if inplace else out
 
     @staticmethod
     def backward(ctx, do):
@@ -76,15 +83,21 @@ class ApplyRotaryEmb(torch.autograd.Function):
         rotary_dim *= 2
         inplace = ctx.inplace
         do_ro = do[..., :rotary_dim]
-        do1, do2 = (do_ro.chunk(2, dim=-1) if not ctx.interleaved
-                    else (do_ro[..., ::2], do_ro[..., 1::2]))
-        dx = torch.empty_like(do) if not inplace else do
+        do1, do2 = (
+            (do_ro[..., ::2], do_ro[..., 1::2])
+            if ctx.interleaved
+            else do_ro.chunk(2, dim=-1)
+        )
+        dx = do if inplace else torch.empty_like(do)
         if inplace:
             dx1, dx2 = do1, do2
         else:
             dx_ro = dx[..., :rotary_dim]
-            dx1, dx2 = (dx_ro.chunk(2, dim=-1) if not ctx.interleaved
-                        else (dx_ro[..., ::2], dx_ro[..., 1::2]))
+            dx1, dx2 = (
+                (dx_ro[..., ::2], dx_ro[..., 1::2])
+                if ctx.interleaved
+                else dx_ro.chunk(2, dim=-1)
+            )
         rotary_emb.apply_rotary(do1, do2, rearrange(cos[:seqlen], 's d -> s 1 d'),
                                 rearrange(sin[:seqlen], 's d -> s 1 d'), dx1, dx2, True)
         if not inplace and rotary_dim < headdim:
@@ -118,11 +131,19 @@ class ApplyRotaryEmbQKV_(torch.autograd.Function):
         sin_k = sin if sin_k is None else sin_k
         assert sin.shape == cos_k.shape == sin_k.shape == (rotary_seqlen, rotary_dim // 2)
         q_ro = qkv[:, :, 0, :, :rotary_dim]
-        q1, q2 = q_ro.chunk(2, dim=-1) if not interleaved else (q_ro[..., ::2], q_ro[..., 1::2])
+        q1, q2 = (
+            (q_ro[..., ::2], q_ro[..., 1::2])
+            if interleaved
+            else q_ro.chunk(2, dim=-1)
+        )
         rotary_emb.apply_rotary(q1, q2, rearrange(cos[:seqlen], 's d -> s 1 d'),
                                 rearrange(sin[:seqlen], 's d -> s 1 d'), q1, q2, False)
         k_ro = qkv[:, :, 1, :, :rotary_dim]
-        k1, k2 = k_ro.chunk(2, dim=-1) if not interleaved else (k_ro[..., ::2], k_ro[..., 1::2])
+        k1, k2 = (
+            (k_ro[..., ::2], k_ro[..., 1::2])
+            if interleaved
+            else k_ro.chunk(2, dim=-1)
+        )
         rotary_emb.apply_rotary(k1, k2, rearrange(cos_k[:seqlen], 's d -> s 1 d'),
                                 rearrange(sin_k[:seqlen], 's d -> s 1 d'), k1, k2, False)
         ctx.save_for_backward(cos, sin, cos_k, sin_k)
@@ -136,13 +157,19 @@ class ApplyRotaryEmbQKV_(torch.autograd.Function):
         rotary_dim = cos.shape[-1]
         rotary_dim *= 2
         dq_ro = dqkv[:, :, 0, :, :rotary_dim]
-        dq1, dq2 = (dq_ro.chunk(2, dim=-1) if not ctx.interleaved
-                    else (dq_ro[..., ::2], dq_ro[..., 1::2]))
+        dq1, dq2 = (
+            (dq_ro[..., ::2], dq_ro[..., 1::2])
+            if ctx.interleaved
+            else dq_ro.chunk(2, dim=-1)
+        )
         rotary_emb.apply_rotary(dq1, dq2, rearrange(cos[:seqlen], 's d -> s 1 d'),
                                 rearrange(sin[:seqlen], 's d -> s 1 d'), dq1, dq2, True)
         dk_ro = dqkv[:, :, 1, :, :rotary_dim]
-        dk1, dk2 = (dk_ro.chunk(2, dim=-1) if not ctx.interleaved
-                    else (dk_ro[..., ::2], dk_ro[..., 1::2]))
+        dk1, dk2 = (
+            (dk_ro[..., ::2], dk_ro[..., 1::2])
+            if ctx.interleaved
+            else dk_ro.chunk(2, dim=-1)
+        )
         rotary_emb.apply_rotary(dk1, dk2, rearrange(cos_k[:seqlen], 's d -> s 1 d'),
                                 rearrange(sin_k[:seqlen], 's d -> s 1 d'), dk1, dk2, True)
         return dqkv, None, None, None, None, None

@@ -76,7 +76,6 @@ class FastGeLUFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         input, = ctx.saved_tensors
-        tmp = gelu_bwd(grad_output, input)
-        return tmp
+        return gelu_bwd(grad_output, input)
 
 fast_gelu_impl = FastGeLUFunction.apply

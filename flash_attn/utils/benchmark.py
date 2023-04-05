@@ -37,9 +37,8 @@ def benchmark_backward(fn, *inputs, grad=None, repeats=10, desc='', verbose=True
             y = y[0]
     if grad is None:
         grad = torch.randn_like(y)
-    else:
-        if grad.shape != y.shape:
-            raise RuntimeError('Grad shape does not match output shape')
+    elif grad.shape != y.shape:
+        raise RuntimeError('Grad shape does not match output shape')
     for _ in range(repeats):  # warmup
         y.backward(grad, retain_graph=True)
     t = benchmark.Timer(

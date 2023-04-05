@@ -276,13 +276,19 @@ class ParallelBlock(nn.Module):
             else:
                 residual = (residual + dropped1) if residual is not None else dropped1
             hidden_states1 = self.norm1(residual.to(dtype=self.norm1.weight.dtype))
-            hidden_states2 = (self.norm2(residual.to(dtype=self.norm2.weight.dtype))
-                              if not self.tied_norm else hidden_states1)
+            hidden_states2 = (
+                hidden_states1
+                if self.tied_norm
+                else self.norm2(residual.to(dtype=self.norm2.weight.dtype))
+            )
             if self.residual_in_fp32:
                 residual = residual.to(torch.float32)
         else:
-            weight2, bias2 = ((self.norm2.weight, self.norm2.bias)
-                              if not self.tied_norm else (None, None))
+            weight2, bias2 = (
+                (None, None)
+                if self.tied_norm
+                else (self.norm2.weight, self.norm2.bias)
+            )
             hidden_states1, hidden_states2, residual = dropout_add_layer_norm_parallel_residual(
                 hidden_states1, hidden_states2, residual, self.norm1.weight, self.norm1.bias,
                 weight2, bias2, self.dropout1.p if self.training else 0.0, self.norm1.eps,

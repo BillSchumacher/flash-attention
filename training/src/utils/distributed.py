@@ -48,11 +48,12 @@ def get_rank():
     """
     Gets distributed rank or returns zero if distributed is not initialized.
     """
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        rank = torch.distributed.get_rank()
-    else:
-        rank = 0
-    return rank
+    return (
+        torch.distributed.get_rank()
+        if torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+        else 0
+    )
 
 
 def get_world_size():
@@ -60,45 +61,47 @@ def get_world_size():
     Gets total number of distributed workers or returns one if distributed is
     not initialized.
     """
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        world_size = torch.distributed.get_world_size()
-    else:
-        world_size = 1
-    return world_size
+    return (
+        torch.distributed.get_world_size()
+        if torch.distributed.is_available()
+        and torch.distributed.is_initialized()
+        else 1
+    )
 
 
 def all_reduce_item(value, op='sum'):
     """
     All-reduces single scalar value if distributed is in use
     """
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        if op == 'sum' or op == 'mean':
-            dop = torch.distributed.ReduceOp.SUM
-        elif op == 'min':
-            dop = torch.distributed.ReduceOp.MIN
-        elif op == 'max':
-            dop = torch.distributed.ReduceOp.MAX
-        elif op == 'product':
-            dop = torch.distributed.ReduceOp.PRODUCT
-        else:
-            raise RuntimeError('Unsupported reduce op')
-
-        backend = torch.distributed.get_backend()
-        if backend == torch.distributed.Backend.NCCL:
-            device = torch.device('cuda')
-        elif backend == torch.distributed.Backend.GLOO:
-            device = torch.device('cpu')
-        else:
-            raise RuntimeError('Unsupported distributed backend')
-
-        tensor = torch.tensor(value, device=device)
-        torch.distributed.all_reduce(tensor, dop)
-        if op == 'mean':
-            tensor /= get_world_size()
-        ret = tensor.item()
+    if (
+        not torch.distributed.is_available()
+        or not torch.distributed.is_initialized()
+    ):
+        return value
+    if op in ['sum', 'mean']:
+        dop = torch.distributed.ReduceOp.SUM
+    elif op == 'min':
+        dop = torch.distributed.ReduceOp.MIN
+    elif op == 'max':
+        dop = torch.distributed.ReduceOp.MAX
+    elif op == 'product':
+        dop = torch.distributed.ReduceOp.PRODUCT
     else:
-        ret = value
-    return ret
+        raise RuntimeError('Unsupported reduce op')
+
+    backend = torch.distributed.get_backend()
+    if backend == torch.distributed.Backend.NCCL:
+        device = torch.device('cuda')
+    elif backend == torch.distributed.Backend.GLOO:
+        device = torch.device('cpu')
+    else:
+        raise RuntimeError('Unsupported distributed backend')
+
+    tensor = torch.tensor(value, device=device)
+    torch.distributed.all_reduce(tensor, dop)
+    if op == 'mean':
+        tensor /= get_world_size()
+    return tensor.item()
 
 
 @contextmanager
@@ -106,6 +109,5 @@ def sync_workers():
     """
     Yields distributed rank and synchronizes all workers on exit.
     """
-    rank = get_rank()
-    yield rank
+    yield get_rank()
     barrier()
